@@ -89,27 +89,50 @@ runs:
 
         chmod +x "$INSTALL_DIR/bin/fm1-emu"
 
-    - name: Download WASM emulator
+    - name: Download or build WASM emulator
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
+        VERSION: ${{ steps.resolve.outputs.version }}
       run: |
         set -euo pipefail
         INSTALL_DIR="$HOME/.fm1-emulator"
         WEB_DIR="$INSTALL_DIR/web"
         mkdir -p "$WEB_DIR"
 
-        # Download pre-built WASM dist from our own release
+        if [ -f "$WEB_DIR/fm1_web.wasm" ]; then
+          echo "WASM already present at $WEB_DIR/fm1_web.wasm, skipping"
+          exit 0
+        fi
+
+        # Try downloading pre-built WASM dist from our release
+        ACTION_REPO="${{ github.action_repository }}"
+        ACTION_REPO="${ACTION_REPO:-${{ github.repository }}}"
         ACTION_TAG=$(cd "${{ github.action_path }}" && git describe --tags --abbrev=0 2>/dev/null || echo "v1")
-        URL="https://github.com/${{ github.action_repository }}/releases/download/${ACTION_TAG}/fm1-web-dist.tar.gz"
+        URL="https://github.com/${ACTION_REPO}/releases/download/${ACTION_TAG}/fm1-web-dist.tar.gz"
 
         echo "Downloading WASM dist from $URL..."
-        curl -fSL --retry 3 -o /tmp/fm1-web-dist.tar.gz "$URL"
-        tar -xzf /tmp/fm1-web-dist.tar.gz -C "$WEB_DIR"
-        rm -f /tmp/fm1-web-dist.tar.gz
+        DOWNLOADED=false
+        curl -fSL --retry 2 -o /tmp/fm1-web-dist.tar.gz "$URL" && DOWNLOADED=true || true
 
-        echo "WASM dist ready: $(ls "$WEB_DIR/fm1_web.wasm")"
+        if [ "$DOWNLOADED" = true ]; then
+          tar -xzf /tmp/fm1-web-dist.tar.gz -C "$WEB_DIR"
+          rm -f /tmp/fm1-web-dist.tar.gz
+          echo "WASM dist downloaded from release"
+        else
+          echo "::warning::Pre-built WASM not found, building from source..."
+          SOURCE_DIR="$(mktemp -d)"
+          git clone --depth 1 --branch "$VERSION" \
+            https://github.com/joakimeriksson/fm1-emu.git "$SOURCE_DIR"
+          rustup target add wasm32-unknown-unknown
+          cd "$SOURCE_DIR" && bash web/build.sh
+          cp "$SOURCE_DIR/web/dist/"* "$WEB_DIR/"
+          rm -rf "$SOURCE_DIR"
+          echo "WASM built from source"
+        fi
+
+        ls "$WEB_DIR/fm1_web.wasm"
 
     - name: Install Playwright
       if: inputs.install-playwright == 'true'

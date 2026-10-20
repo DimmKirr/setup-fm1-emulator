@@ -37,6 +37,12 @@ jobs:
           tar -czf /tmp/fm1-web-dist.tar.gz -C /tmp/fm1-emu-src/web/dist .
           echo "Packaged: $(ls -lh /tmp/fm1-web-dist.tar.gz)"
 
+      - name: Seed WASM dist for action test
+        run: |
+          mkdir -p "$HOME/.fm1-emulator/web"
+          tar -xzf /tmp/fm1-web-dist.tar.gz -C "$HOME/.fm1-emulator/web"
+          echo "Seeded: $(ls $HOME/.fm1-emulator/web/fm1_web.wasm)"
+
       - name: Test action before releasing
         uses: ./
 
