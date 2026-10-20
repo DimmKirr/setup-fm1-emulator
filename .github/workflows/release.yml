@@ -51,6 +51,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          gh release delete "$GITHUB_REF_NAME" --yes 2>/dev/null || true
           gh release create "$GITHUB_REF_NAME" \
             /tmp/fm1-web-dist.tar.gz \
             --title "setup-fm1-emulator $GITHUB_REF_NAME" \
