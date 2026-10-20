@@ -1,0 +1,68 @@
+name: Track upstream releases
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Get current default version
+        id: current
+        run: |
+          CURRENT=$(grep -oP "default: '\\Kv[^']+" action.yml)
+          echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "Current default: $CURRENT"
+
+      - name: Check for new fm1-emu release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          LATEST=$(gh release view --repo joakimeriksson/fm1-emu --json tagName -q .tagName)
+          CURRENT="${{ steps.current.outputs.version }}"
+          echo "Current: $CURRENT"
+          echo "Latest:  $LATEST"
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+          if [ "$LATEST" != "$CURRENT" ]; then
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create update PR
+        if: steps.upstream.outputs.new == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEW_VERSION: ${{ steps.upstream.outputs.latest }}
+          OLD_VERSION: ${{ steps.current.outputs.version }}
+        run: |
+          set -euo pipefail
+          BRANCH="auto/upstream-${NEW_VERSION}"
+          git checkout -b "$BRANCH"
+
+          sed -i "s/default: '${OLD_VERSION}'/default: '${NEW_VERSION}'/" action.yml
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add action.yml
+          git commit -m "chore: bump default fm1-emu to $NEW_VERSION"
+
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --title "chore: bump fm1-emu default to $NEW_VERSION" \
+            --body "Upstream fm1-emu released $NEW_VERSION (was $OLD_VERSION).
+
+          After merging, tag the new version to create a release and update the \`v1\` alias." \
+            --base main \
+            --head "$BRANCH"

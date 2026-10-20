@@ -1,6 +1,6 @@
 # setup-fm1-emulator
 
-GitHub Action and local installer for [fm1-emu](https://github.com/joakimeriksson/fm1-emu), the FM1 synthesizer emulator. Downloads the pre-built binary and checks out the source (for web/WASM assets, patching, etc.).
+GitHub Action for [fm1-emu](https://github.com/joakimeriksson/fm1-emu), the FM1 synthesizer emulator. Downloads the pre-built binary and checks out the source (for web/WASM assets, patching, etc.).
 
 ## CI Usage
 
@@ -38,24 +38,6 @@ Pin to a specific version:
 | `source-path` | Path to the fm1-emu source checkout |
 | `web-path` | Path to the web/ directory (WASM emulator) |
 | `cache-hit` | Whether restored from cache |
-
-## Local Install
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/dimmkirr/setup-fm1-emulator/main/install.sh | bash
-```
-
-Specific version:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/dimmkirr/setup-fm1-emulator/main/install.sh | bash -s v0.2.0
-```
-
-Custom install location:
-
-```bash
-FM1_EMULATOR_HOME=/opt/fm1-emu bash install.sh
-```
 
 ## How It Works
 

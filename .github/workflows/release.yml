@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Test action before releasing
+        uses: ./
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "setup-fm1-emulator $GITHUB_REF_NAME" \
+            --notes "Installs fm1-emu from [joakimeriksson/fm1-emu](https://github.com/joakimeriksson/fm1-emu) releases.
+
+          \`\`\`yaml
+          - uses: dimmkirr/setup-fm1-emulator@v1
+            with:
+              version: $GITHUB_REF_NAME
+          \`\`\`"
+
+      - name: Update major version tag
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MAJOR=$(echo "$GITHUB_REF_NAME" | grep -oP '^v\d+')
+          gh api -X PATCH repos/${{ github.repository }}/git/refs/tags/"$MAJOR" \
+            -f sha="$(git rev-parse HEAD)" -F force=true 2>/dev/null \
+          || gh api -X POST repos/${{ github.repository }}/git/refs \
+            -f ref="refs/tags/$MAJOR" -f sha="$(git rev-parse HEAD)"
