@@ -127,7 +127,7 @@ runs:
             https://github.com/joakimeriksson/fm1-emu.git "$SOURCE_DIR"
           rustup target add wasm32-unknown-unknown
           cd "$SOURCE_DIR" && bash web/build.sh
-          cp "$SOURCE_DIR/web/dist/"* "$WEB_DIR/"
+          cp -r "$SOURCE_DIR/web/dist/"* "$WEB_DIR/"
           rm -rf "$SOURCE_DIR"
           echo "WASM built from source"
         fi
