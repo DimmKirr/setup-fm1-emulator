@@ -17,9 +17,10 @@ jobs:
       - name: Resolve upstream version
         id: resolve
         run: |
-          # Read the default version from action.yml
-          VERSION=$(grep -oP "default:\s*'\K[^']+" action.yml | head -1)
+          # Read the hardcoded VERSION= from action.yml
+          VERSION=$(grep -oP 'VERSION="\K[^"]+' action.yml | head -1)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Baked emulator version: $VERSION"
 
       - name: Clone fm1-emu source
         run: |
@@ -59,10 +60,10 @@ jobs:
 
           Includes pre-built WASM emulator (\`fm1-web-dist.tar.gz\`) for browser-based E2E testing.
 
+          Bundled fm1-emu version: \`${{ steps.resolve.outputs.version }}\`
+
           \`\`\`yaml
-          - uses: dimmkirr/setup-fm1-emulator@v1
-            with:
-              version: $GITHUB_REF_NAME
+          - uses: dimmkirr/setup-fm1-emulator@$GITHUB_REF_NAME
           \`\`\`"
 
       - name: Update major version tag

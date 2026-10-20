@@ -15,12 +15,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Get current default version
+      - name: Get current baked version
         id: current
         run: |
-          CURRENT=$(grep -oP "default: '\\Kv[^']+" action.yml)
+          CURRENT=$(grep -oP 'VERSION="\Kv[^"]+' action.yml | head -1)
           echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
-          echo "Current default: $CURRENT"
+          echo "Current baked version: $CURRENT"
 
       - name: Check for new fm1-emu release
         id: upstream
@@ -50,7 +50,7 @@ jobs:
           BRANCH="auto/upstream-${NEW_VERSION}"
           git checkout -b "$BRANCH"
 
-          sed -i "s/default: '${OLD_VERSION}'/default: '${NEW_VERSION}'/" action.yml
+          sed -i "s/VERSION=\"${OLD_VERSION}\"/VERSION=\"${NEW_VERSION}\"/" action.yml
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'

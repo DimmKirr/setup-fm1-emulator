@@ -1,14 +1,13 @@
 name: 'Setup FM1 Emulator'
-description: 'Install the fm1-emu binary and source for FM1 firmware testing'
+description: 'Install the fm1-emu binary and WASM emulator for FM1 firmware testing'
 branding:
   icon: 'play-circle'
   color: 'purple'
 
+# Baked emulator version. Bump this + cut a new release to update.
+# The track.yml workflow creates a PR automatically when upstream releases.
+
 inputs:
-  version:
-    description: 'fm1-emu release tag (e.g. v0.2.0)'
-    required: false
-    default: 'v0.2.0'
   github-token:
     description: 'GitHub token for downloading release assets'
     required: false
@@ -43,8 +42,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        VERSION="${{ inputs.version }}"
-        # Strip leading v for the asset filename
+        VERSION="v0.2.0"
         SEMVER="${VERSION#v}"
 
         case "$(uname -s)-$(uname -m)" in
