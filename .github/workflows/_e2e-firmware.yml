@@ -44,7 +44,8 @@ jobs:
           RESULTS_DIR: results
         run: |
           set -o pipefail
-          python3 -m unittest examples.e2e_firmware_test -v 2>&1 \
+          TEST_MODULE="examples.e2e_${FIRMWARE_NAME}_test"
+          python3 -m unittest "$TEST_MODULE" -v 2>&1 \
             | tee e2e-output.txt
 
       - name: Upload results

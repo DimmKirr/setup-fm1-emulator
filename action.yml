@@ -80,7 +80,7 @@ runs:
         curl -fSL --retry 3 -o "/tmp/$ASSET" "$URL"
 
         echo "Extracting to $INSTALL_DIR/bin/..."
-        tar -xzf "/tmp/$ASSET" -C "$INSTALL_DIR/bin/"
+        tar -xzf "/tmp/$ASSET" -C "$INSTALL_DIR/bin/" --strip-components=1
         rm -f "/tmp/$ASSET"
 
         chmod +x "$INSTALL_DIR/bin/fm1-emu"

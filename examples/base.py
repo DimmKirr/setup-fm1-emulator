@@ -5,15 +5,12 @@
 # ///
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Kerem Kilic (Ellic Studio)
-"""E2E: boot firmware in fm1-emu WASM, take screenshots, navigate to About."""
-import base64
+"""Shared E2E test infrastructure for fm1-emu firmware testing."""
 import http.server
 import os
 import socket
-import sys
 import threading
 import unittest
-from datetime import datetime, timezone
 from pathlib import Path
 
 EMU_SOURCE = Path(os.environ.get('FM1_EMU_SOURCE', ''))
@@ -43,8 +40,10 @@ def _make_handler(directory):
     return _Handler
 
 
-class FirmwareBootTest(unittest.TestCase):
-    """Boot a firmware in the fm1-emu WASM emulator and screenshot it."""
+class FirmwareTestBase(unittest.TestCase):
+    """Base class: boots firmware in fm1-emu WASM, provides helpers."""
+
+    FIRMWARE: str = ''
 
     _server = None
     _thread = None
@@ -56,12 +55,14 @@ class FirmwareBootTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        fw = cls.FIRMWARE or FIRMWARE_NAME
+        if not fw:
+            raise unittest.SkipTest('FIRMWARE_NAME not set')
+
         web_dir = EMU_SOURCE / 'web'
         if not web_dir.is_dir():
             raise unittest.SkipTest(
                 f'FM1_EMU_SOURCE/web not found ({web_dir})')
-        if not FIRMWARE_NAME:
-            raise unittest.SkipTest('FIRMWARE_NAME not set')
 
         try:
             from playwright.sync_api import sync_playwright
@@ -78,7 +79,7 @@ class FirmwareBootTest(unittest.TestCase):
             target=cls._server.serve_forever, daemon=True)
         cls._thread.start()
         cls.emu_url = (
-            f'http://127.0.0.1:{port}/?fw={FIRMWARE_NAME}&mhz=100&debug=1')
+            f'http://127.0.0.1:{port}/?fw={fw}&mhz=100&debug=1')
 
         cls._pw = sync_playwright().start()
         launch_kwargs = dict(
@@ -89,7 +90,7 @@ class FirmwareBootTest(unittest.TestCase):
             launch_kwargs['executable_path'] = CHROMIUM_PATH
         cls._browser = cls._pw.chromium.launch(**launch_kwargs)
 
-        cls._screenshot_dir = RESULTS_DIR / FIRMWARE_NAME / 'screenshots'
+        cls._screenshot_dir = RESULTS_DIR / fw / 'screenshots'
         cls._screenshot_dir.mkdir(parents=True, exist_ok=True)
 
     @classmethod
@@ -105,6 +106,10 @@ class FirmwareBootTest(unittest.TestCase):
             cls._pw.stop()
         if cls._server:
             cls._server.shutdown()
+
+    @classmethod
+    def _fw_name(cls):
+        return cls.FIRMWARE or FIRMWARE_NAME
 
     def _get_page(self):
         if self.__class__._page is None:
@@ -137,7 +142,7 @@ class FirmwareBootTest(unittest.TestCase):
                     timeout=90_000)
             except Exception:
                 status = page.text_content('#status') or '(empty)'
-                print(f'\n=== Boot failed for {FIRMWARE_NAME}. '
+                print(f'\n=== Boot failed for {self._fw_name()}. '
                       f'#status: {status}', flush=True)
                 for msg in page._console_logs[-20:]:
                     print(f'  {msg}', flush=True)
@@ -147,8 +152,9 @@ class FirmwareBootTest(unittest.TestCase):
         return self.__class__._page
 
     def _screenshot(self, name):
+        fw = self._fw_name()
         page = self._get_page()
-        path = self._screenshot_dir / f'{FIRMWARE_NAME}-{name}.png'
+        path = self._screenshot_dir / f'{fw}-{name}.png'
         page.screenshot(path=str(path))
         return path
 
@@ -175,33 +181,10 @@ class FirmwareBootTest(unittest.TestCase):
         }''', [enc, clicks])
         page.wait_for_timeout(delay_ms)
 
-    def test_01_boot_and_screenshot(self):
+    def _write_log(self):
         page = self._get_page()
-        self._screenshot('home')
-        status = page.text_content('#status')
-        self.assertIn(BOOT_PATTERN, status)
-
-    def test_02_navigate_to_about(self):
-        page = self._get_page()
-
-        self._long_push(page, '7', hold_ms=900)
-        self._screenshot('settings-menu')
-
-        self._send_enc(page, 3, 19, delay_ms=500)
-        self._screenshot('settings-about-selected')
-
-        self._push(page, 'x', delay_ms=800)
-        self._screenshot('about')
-
-        self._send_enc(page, 6, 3, delay_ms=400)
-        self._screenshot('about-scrolled')
-
-        self._push(page, 'z', delay_ms=300)
-        self._long_push(page, '7', hold_ms=900)
-
-    def test_03_write_log(self):
-        page = self._get_page()
-        log_dir = RESULTS_DIR / FIRMWARE_NAME
+        fw = self._fw_name()
+        log_dir = RESULTS_DIR / fw
         log_dir.mkdir(parents=True, exist_ok=True)
 
         info = page.evaluate('''() => {
@@ -212,7 +195,7 @@ class FirmwareBootTest(unittest.TestCase):
             return r;
         }''')
         lines = [
-            f'firmware: {FIRMWARE_NAME}',
+            f'firmware: {fw}',
             f'title:    {info["title"]}',
             f'status:   {info["status"]}',
             '',
@@ -223,7 +206,3 @@ class FirmwareBootTest(unittest.TestCase):
         ]
         lines.extend(page._console_logs or ['(no console output)'])
         (log_dir / 'emulator.log').write_text('\n'.join(lines) + '\n')
-
-
-if __name__ == '__main__':
-    unittest.main()
