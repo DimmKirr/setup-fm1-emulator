@@ -13,7 +13,7 @@ import threading
 import unittest
 from pathlib import Path
 
-EMU_SOURCE = Path(os.environ.get('FM1_EMU_SOURCE', ''))
+FM1_WEB_DIR = Path(os.environ.get('FM1_WEB_DIR', os.environ.get('FM1_EMU_SOURCE', '')))
 FIRMWARE_NAME = os.environ.get('FIRMWARE_NAME', '')
 FIRMWARE_URL = os.environ.get('FIRMWARE_URL', '')
 RESULTS_DIR = Path(os.environ.get('RESULTS_DIR', 'results'))
@@ -53,10 +53,10 @@ class FirmwareUITest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        web_dir = EMU_SOURCE / 'web'
-        if not web_dir.is_dir():
+        web_dir = FM1_WEB_DIR
+        if not (web_dir / 'fm1_web.wasm').is_file():
             raise unittest.SkipTest(
-                f'FM1_EMU_SOURCE/web not found ({web_dir})')
+                f'fm1_web.wasm not found in {web_dir} (set FM1_WEB_DIR)')
         if not FIRMWARE_NAME:
             raise unittest.SkipTest('FIRMWARE_NAME not set')
 

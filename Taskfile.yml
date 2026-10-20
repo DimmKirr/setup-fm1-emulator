@@ -1,0 +1,63 @@
+version: '3'
+
+vars:
+  FM1_VERSION: v0.2.0
+  INSTALL_DIR: '{{.HOME}}/.fm1-emulator'
+  SOURCE_DIR: '{{.INSTALL_DIR}}/source'
+  WEB_DIST: '{{.SOURCE_DIR}}/web/dist'
+
+tasks:
+  clone:
+    desc: Clone fm1-emu source
+    status:
+      - test -d {{.SOURCE_DIR}}/.git
+    cmds:
+      - git clone --depth 1 --branch {{.FM1_VERSION}}
+          https://github.com/joakimeriksson/fm1-emu.git {{.SOURCE_DIR}}
+
+  build-wasm:
+    desc: Build the WASM emulator (requires Rust + wasm32 target)
+    deps: [clone]
+    status:
+      - test -f {{.WEB_DIST}}/fm1_web.wasm
+    cmds:
+      - rustup target add wasm32-unknown-unknown
+      - cd {{.SOURCE_DIR}} && bash web/build.sh
+
+  install-playwright:
+    desc: Install Playwright and Chromium
+    status:
+      - python3 -c "import playwright" 2>/dev/null
+    cmds:
+      - pip install playwright
+      - python3 -m playwright install --with-deps chromium
+
+  test:
+    desc: Run E2E firmware UI test for a single firmware
+    deps: [build-wasm, install-playwright]
+    vars:
+      FIRMWARE: '{{.FIRMWARE | default "felucca"}}'
+    env:
+      FM1_WEB_DIR: '{{.WEB_DIST}}'
+      FIRMWARE_NAME: '{{.FIRMWARE}}'
+      RESULTS_DIR: results
+    cmds:
+      - python3 -m unittest examples.e2e_firmware_ui_test -v
+
+  test-all:
+    desc: Run E2E tests for all firmwares
+    deps: [build-wasm, install-playwright]
+    cmds:
+      - for:
+          - felucca
+          - sloop
+          - melodee
+        task: test
+        vars:
+          FIRMWARE: '{{.ITEM}}'
+
+  clean:
+    desc: Remove build artifacts and results
+    cmds:
+      - rm -rf results/
+      - rm -rf {{.WEB_DIST}}

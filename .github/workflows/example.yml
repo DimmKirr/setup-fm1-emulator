@@ -38,7 +38,7 @@ jobs:
         id: e2e
         continue-on-error: true
         env:
-          FM1_EMU_SOURCE: ${{ steps.emu.outputs.source-path }}
+          FM1_WEB_DIR: ${{ steps.emu.outputs.web-path }}
           FIRMWARE_NAME: ${{ matrix.firmware }}
           FIRMWARE_URL: ${{ matrix.url }}
           RESULTS_DIR: results

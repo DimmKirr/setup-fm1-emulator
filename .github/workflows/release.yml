@@ -12,7 +12,30 @@ jobs:
   release:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@v4
+
+      - name: Resolve upstream version
+        id: resolve
+        run: |
+          # Read the default version from action.yml
+          VERSION=$(grep -oP "default:\s*'\K[^']+" action.yml | head -1)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Clone fm1-emu source
+        run: |
+          git clone --depth 1 --branch "${{ steps.resolve.outputs.version }}" \
+            https://github.com/joakimeriksson/fm1-emu.git /tmp/fm1-emu-src
+
+      - name: Build WASM emulator
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cd /tmp/fm1-emu-src
+          bash web/build.sh
+
+      - name: Package WASM dist
+        run: |
+          tar -czf /tmp/fm1-web-dist.tar.gz -C /tmp/fm1-emu-src/web/dist .
+          echo "Packaged: $(ls -lh /tmp/fm1-web-dist.tar.gz)"
 
       - name: Test action before releasing
         uses: ./
@@ -23,8 +46,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
+            /tmp/fm1-web-dist.tar.gz \
             --title "setup-fm1-emulator $GITHUB_REF_NAME" \
             --notes "Installs fm1-emu from [joakimeriksson/fm1-emu](https://github.com/joakimeriksson/fm1-emu) releases.
+
+          Includes pre-built WASM emulator (\`fm1-web-dist.tar.gz\`) for browser-based E2E testing.
 
           \`\`\`yaml
           - uses: dimmkirr/setup-fm1-emulator@v1
