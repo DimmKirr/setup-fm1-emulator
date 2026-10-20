@@ -13,6 +13,10 @@ inputs:
     description: 'GitHub token for downloading release assets'
     required: false
     default: ${{ github.token }}
+  install-playwright:
+    description: 'Install Playwright and Chromium for E2E testing'
+    required: false
+    default: 'true'
 
 outputs:
   version:
@@ -30,6 +34,9 @@ outputs:
   cache-hit:
     description: 'Whether the emulator was restored from cache'
     value: ${{ steps.cache.outputs.cache-hit }}
+  chromium-path:
+    description: 'Path to the Playwright Chromium binary (empty if install-playwright is false)'
+    value: ${{ steps.playwright.outputs.chromium-path }}
 
 runs:
   using: 'composite'
@@ -102,6 +109,21 @@ runs:
 
         # Record version for cache validation
         echo "$VERSION" > "$INSTALL_DIR/VERSION"
+
+    - name: Install Playwright
+      if: inputs.install-playwright == 'true'
+      id: playwright
+      shell: bash
+      run: |
+        set -euo pipefail
+        pip install playwright
+        python3 -m playwright install --with-deps chromium
+        CHROMIUM=$(python3 -c "from playwright._impl._driver import compute_driver_executable; print(compute_driver_executable())" 2>/dev/null || true)
+        if [ -z "$CHROMIUM" ]; then
+          CHROMIUM=$(find "$HOME/.cache/ms-playwright" -name chromium-* -path "*/chrome-linux/chrome" 2>/dev/null | head -1 || true)
+        fi
+        echo "chromium-path=$CHROMIUM" >> "$GITHUB_OUTPUT"
+        echo "Playwright Chromium installed: $CHROMIUM"
 
     - name: Set environment
       id: setup
