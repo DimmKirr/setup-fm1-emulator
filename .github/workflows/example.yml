@@ -65,7 +65,7 @@ jobs:
 
           for png in results/${{ matrix.firmware }}/screenshots/*.png; do
             [ -f "$png" ] || continue
-            asset_name="${{ matrix.firmware }}-$(basename "$png")"
+            asset_name="$(basename "$png")"
             # Delete existing asset with same name, then upload
             gh release delete-asset "$TAG" "$asset_name" --repo "$REPO" --yes 2>/dev/null || true
             gh release upload "$TAG" "$png#$asset_name" --repo "$REPO" --clobber
@@ -83,7 +83,7 @@ jobs:
               [ -f "$png" ] || continue
               name=$(basename "$png" .png)
               label=$(echo "$name" | sed "s/^${{ matrix.firmware }}-//" | tr '_-' '  ')
-              asset_name="${{ matrix.firmware }}-$(basename "$png")"
+              asset_name="$(basename "$png")"
               url="https://github.com/${REPO}/releases/download/${TAG}/${asset_name}"
               echo "### ${label}"
               echo ""
