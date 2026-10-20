@@ -64,7 +64,7 @@ jobs:
             for png in results/${{ matrix.firmware }}/screenshots/*.png; do
               [ -f "$png" ] || continue
               name=$(basename "$png" .png)
-              label=$(echo "$name" | sed "s/^${{ matrix.firmware }}-//" | tr '-_' '  ')
+              label=$(echo "$name" | sed "s/^${{ matrix.firmware }}-//" | tr '_-' '  ')
               b64=$(base64 -w 0 "$png")
               echo "### $label"
               echo ""
