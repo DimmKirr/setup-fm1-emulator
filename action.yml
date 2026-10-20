@@ -63,7 +63,7 @@ runs:
       uses: actions/cache@v4
       with:
         path: ~/.fm1-emulator
-        key: fm1-emulator-${{ steps.resolve.outputs.version }}-${{ steps.resolve.outputs.platform }}
+        key: fm1-emulator-v2-${{ steps.resolve.outputs.version }}-${{ steps.resolve.outputs.platform }}
 
     - name: Download binary
       if: steps.cache.outputs.cache-hit != 'true'
