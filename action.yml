@@ -1,0 +1,129 @@
+name: 'Setup FM1 Emulator'
+description: 'Install the fm1-emu binary and source for FM1 firmware testing'
+branding:
+  icon: 'play-circle'
+  color: 'purple'
+
+inputs:
+  version:
+    description: 'fm1-emu release tag (e.g. v0.2.0)'
+    required: false
+    default: 'v0.2.0'
+  github-token:
+    description: 'GitHub token for downloading release assets'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  version:
+    description: 'Installed fm1-emu version'
+    value: ${{ steps.setup.outputs.version }}
+  bin-path:
+    description: 'Path to the fm1-emu binary'
+    value: ${{ steps.setup.outputs.bin-path }}
+  source-path:
+    description: 'Path to the fm1-emu source checkout'
+    value: ${{ steps.setup.outputs.source-path }}
+  web-path:
+    description: 'Path to the fm1-emu web/ directory (WASM emulator)'
+    value: ${{ steps.setup.outputs.web-path }}
+  cache-hit:
+    description: 'Whether the emulator was restored from cache'
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Resolve version and platform
+      id: resolve
+      shell: bash
+      run: |
+        set -euo pipefail
+        VERSION="${{ inputs.version }}"
+        # Strip leading v for the asset filename
+        SEMVER="${VERSION#v}"
+
+        case "$(uname -s)-$(uname -m)" in
+          Linux-x86_64)  PLATFORM="linux-x86_64" ;;
+          Linux-aarch64) PLATFORM="linux-arm64"   ;;
+          Darwin-arm64)  PLATFORM="macos-arm64"   ;;
+          *) echo "::error::Unsupported platform: $(uname -s)-$(uname -m)"; exit 1 ;;
+        esac
+
+        echo "version=$VERSION"   >> "$GITHUB_OUTPUT"
+        echo "semver=$SEMVER"     >> "$GITHUB_OUTPUT"
+        echo "platform=$PLATFORM" >> "$GITHUB_OUTPUT"
+
+    - name: Restore from cache
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.fm1-emulator
+        key: fm1-emulator-${{ steps.resolve.outputs.version }}-${{ steps.resolve.outputs.platform }}
+
+    - name: Download binary
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        VERSION: ${{ steps.resolve.outputs.version }}
+        SEMVER: ${{ steps.resolve.outputs.semver }}
+        PLATFORM: ${{ steps.resolve.outputs.platform }}
+      run: |
+        set -euo pipefail
+        INSTALL_DIR="$HOME/.fm1-emulator"
+        mkdir -p "$INSTALL_DIR/bin"
+
+        ASSET="fm1-emu-${SEMVER}-${PLATFORM}.tar.gz"
+        URL="https://github.com/joakimeriksson/fm1-emu/releases/download/${VERSION}/${ASSET}"
+
+        echo "Downloading $URL..."
+        curl -fSL --retry 3 -o "/tmp/$ASSET" "$URL"
+
+        echo "Extracting to $INSTALL_DIR/bin/..."
+        tar -xzf "/tmp/$ASSET" -C "$INSTALL_DIR/bin/"
+        rm -f "/tmp/$ASSET"
+
+        chmod +x "$INSTALL_DIR/bin/fm1-emu"
+
+    - name: Checkout source
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        VERSION: ${{ steps.resolve.outputs.version }}
+      run: |
+        set -euo pipefail
+        INSTALL_DIR="$HOME/.fm1-emulator"
+        SOURCE_DIR="$INSTALL_DIR/source"
+
+        echo "Cloning fm1-emu source at $VERSION..."
+        git clone --depth 1 --branch "$VERSION" \
+          https://github.com/joakimeriksson/fm1-emu.git \
+          "$SOURCE_DIR"
+
+        # Record version for cache validation
+        echo "$VERSION" > "$INSTALL_DIR/VERSION"
+
+    - name: Set environment
+      id: setup
+      shell: bash
+      env:
+        VERSION: ${{ steps.resolve.outputs.version }}
+      run: |
+        set -euo pipefail
+        INSTALL_DIR="$HOME/.fm1-emulator"
+
+        test -x "$INSTALL_DIR/bin/fm1-emu"    || { echo "::error::fm1-emu binary not found"; exit 1; }
+        test -d "$INSTALL_DIR/source/web"      || { echo "::error::fm1-emu source/web not found"; exit 1; }
+
+        echo "$INSTALL_DIR/bin" >> "$GITHUB_PATH"
+
+        echo "version=$VERSION"                          >> "$GITHUB_OUTPUT"
+        echo "bin-path=$INSTALL_DIR/bin/fm1-emu"         >> "$GITHUB_OUTPUT"
+        echo "source-path=$INSTALL_DIR/source"           >> "$GITHUB_OUTPUT"
+        echo "web-path=$INSTALL_DIR/source/web"          >> "$GITHUB_OUTPUT"
+
+        echo "FM1 emulator ready:"
+        echo "  version:  $VERSION"
+        echo "  binary:   $INSTALL_DIR/bin/fm1-emu"
+        echo "  source:   $INSTALL_DIR/source"
+        echo "  web:      $INSTALL_DIR/source/web"
