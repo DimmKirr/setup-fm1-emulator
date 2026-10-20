@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   e2e:
@@ -47,17 +47,35 @@ jobs:
           python3 -m unittest examples.e2e_firmware_ui_test -v 2>&1 \
             | tee e2e-output.txt
 
-      - name: Upload screenshots
+      - name: Upload screenshots to release
         if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: screenshots-${{ matrix.firmware }}
-          path: results/${{ matrix.firmware }}/screenshots/
-          retention-days: 14
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="screenshots"
+          REPO="${{ github.repository }}"
+
+          # Ensure the screenshots release exists
+          gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$REPO" \
+                 --title "E2E Screenshots" \
+                 --notes "Auto-updated by CI. Latest firmware E2E screenshots." \
+                 --prerelease
+
+          for png in results/${{ matrix.firmware }}/screenshots/*.png; do
+            [ -f "$png" ] || continue
+            asset_name="${{ matrix.firmware }}-$(basename "$png")"
+            # Delete existing asset with same name, then upload
+            gh release delete-asset "$TAG" "$asset_name" --repo "$REPO" --yes 2>/dev/null || true
+            gh release upload "$TAG" "$png#$asset_name" --repo "$REPO" --clobber
+          done
 
       - name: Post screenshots to summary
         if: always()
         run: |
+          REPO="${{ github.repository }}"
+          TAG="screenshots"
           {
             echo "## ${{ matrix.firmware }}"
             echo ""
@@ -65,13 +83,22 @@ jobs:
               [ -f "$png" ] || continue
               name=$(basename "$png" .png)
               label=$(echo "$name" | sed "s/^${{ matrix.firmware }}-//" | tr '_-' '  ')
-              b64=$(base64 -w 0 "$png")
-              echo "### $label"
+              asset_name="${{ matrix.firmware }}-$(basename "$png")"
+              url="https://github.com/${REPO}/releases/download/${TAG}/${asset_name}"
+              echo "### ${label}"
               echo ""
-              echo "<img src=\"data:image/png;base64,$b64\" width=\"800\" alt=\"${{ matrix.firmware }} $label\">"
+              echo "![${label}](${url})"
               echo ""
             done
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload screenshots artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: screenshots-${{ matrix.firmware }}
+          path: results/${{ matrix.firmware }}/screenshots/
+          retention-days: 14
 
       - name: Fail if tests failed
         if: steps.e2e.outcome == 'failure'
