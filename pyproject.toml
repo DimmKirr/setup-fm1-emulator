@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "fm1-playwright"
+version = "0.1.0"
+description = "Playwright test harness for FM-1 emulator firmware"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = ["playwright"]
+
+[project.optional-dependencies]
+patchright = ["patchright"]
+
+[tool.setuptools.packages.find]
+include = ["fm1_playwright*"]
