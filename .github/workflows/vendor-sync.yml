@@ -1,0 +1,194 @@
+name: Vendor sync
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Re-publish even if version already mirrored'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+  attestations: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Get current baked version
+        id: current
+        run: |
+          CURRENT=$(grep -oP 'BAKED_VERSION="\Kv[^"]+' action.yml | head -1)
+          echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "Current baked version: $CURRENT"
+
+      - name: Check for new fm1-emu release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          LATEST=$(gh release view --repo joakimeriksson/fm1-emu --json tagName -q .tagName)
+          CURRENT="${{ steps.current.outputs.version }}"
+          echo "Current: $CURRENT"
+          echo "Latest:  $LATEST"
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+          if [ "$LATEST" != "$CURRENT" ]; then
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Check if WASM mirror already exists ──────────────────────
+
+      - name: Check if WASM mirror release exists
+        id: wasm-exists
+        if: steps.upstream.outputs.new == 'true' || inputs.force
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="wasm-${{ steps.upstream.outputs.latest }}"
+          if gh release view "$TAG" --json tagName -q .tagName >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Build and publish WASM ───────────────────────────────────
+
+      - name: Clone fm1-emu source
+        if: >-
+          (steps.upstream.outputs.new == 'true' || inputs.force)
+          && steps.wasm-exists.outputs.exists != 'true'
+        run: |
+          git clone --depth 1 --branch "${{ steps.upstream.outputs.latest }}" \
+            https://github.com/joakimeriksson/fm1-emu.git /tmp/fm1-emu-src
+
+      - name: Build WASM emulator
+        if: >-
+          (steps.upstream.outputs.new == 'true' || inputs.force)
+          && steps.wasm-exists.outputs.exists != 'true'
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cd /tmp/fm1-emu-src
+          bash web/build.sh
+
+      - name: Package WASM dist
+        if: >-
+          (steps.upstream.outputs.new == 'true' || inputs.force)
+          && steps.wasm-exists.outputs.exists != 'true'
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.upstream.outputs.latest }}"
+          ARCHIVE="fm1-web-dist.tar.gz"
+
+          cd /tmp
+          tar -czf "$ARCHIVE" -C /tmp/fm1-emu-src/web/dist .
+          sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
+
+          echo "Archive: $(ls -lh /tmp/$ARCHIVE)"
+          echo "Checksum:"
+          cat "/tmp/${ARCHIVE}.sha256"
+
+          echo "Verifying archive integrity..."
+          mkdir -p /tmp/wasm-verify
+          tar -xzf "/tmp/$ARCHIVE" -C /tmp/wasm-verify
+          test -f /tmp/wasm-verify/fm1_web.wasm \
+            || { echo "::error::WASM archive verification failed: fm1_web.wasm missing"; exit 1; }
+          rm -rf /tmp/wasm-verify
+          echo "Archive verified"
+
+      - name: Publish WASM release
+        if: >-
+          (steps.upstream.outputs.new == 'true' || inputs.force)
+          && steps.wasm-exists.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.upstream.outputs.latest }}
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="wasm-${VERSION}"
+
+          gh release create "$RELEASE_TAG" \
+            /tmp/fm1-web-dist.tar.gz /tmp/fm1-web-dist.tar.gz.sha256 \
+            --repo "${{ github.repository }}" \
+            --prerelease \
+            --title "WASM ${VERSION} (built from source)" \
+            --notes "$(cat <<EOF
+          **Pre-built WASM emulator for fm1-emu ${VERSION}**
+
+          Built from [fm1-emu \`${VERSION}\`](https://github.com/joakimeriksson/fm1-emu/releases/tag/${VERSION}).
+          Used by the [setup-fm1-emulator](https://github.com/${{ github.repository }}) GitHub Action.
+
+          **Archive SHA256:** \`$(cut -d' ' -f1 /tmp/fm1-web-dist.tar.gz.sha256)\`
+
+          Contains: \`index.html\`, \`fm1_web.wasm\`, \`fm1_web.js\`, and supporting web assets.
+          EOF
+          )"
+          echo "Published release $RELEASE_TAG"
+
+      - name: Attest WASM release
+        if: >-
+          (steps.upstream.outputs.new == 'true' || inputs.force)
+          && steps.wasm-exists.outputs.exists != 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: /tmp/fm1-web-dist.tar.gz
+
+      # ── Smoke test ─────────────────────────────────────────────
+
+      - name: Smoke test WASM dist
+        if: >-
+          (steps.upstream.outputs.new == 'true' || inputs.force)
+          && steps.wasm-exists.outputs.exists != 'true'
+        run: |
+          set -euo pipefail
+          WEB_DIR="/tmp/fm1-emu-src/web/dist"
+          test -f "$WEB_DIR/fm1_web.wasm"
+          test -f "$WEB_DIR/index.html"
+          test -f "$WEB_DIR/fm1_web.js"
+          echo "Smoke test passed: all expected files present"
+
+      # ── Bump baked version via PR ──────────────────────────────
+
+      - name: Create version bump PR
+        if: steps.upstream.outputs.new == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEW_VERSION: ${{ steps.upstream.outputs.latest }}
+          OLD_VERSION: ${{ steps.current.outputs.version }}
+        run: |
+          set -euo pipefail
+          BRANCH="auto/upstream-${NEW_VERSION}"
+
+          # Skip if PR branch already exists
+          if git ls-remote --exit-code origin "refs/heads/$BRANCH" >/dev/null 2>&1; then
+            echo "Branch $BRANCH already exists, skipping PR creation"
+            exit 0
+          fi
+
+          git checkout -b "$BRANCH"
+          sed -i "s/BAKED_VERSION=\"${OLD_VERSION}\"/BAKED_VERSION=\"${NEW_VERSION}\"/" action.yml
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add action.yml
+          git commit -m "chore: bump default fm1-emu to $NEW_VERSION"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --title "chore: bump fm1-emu default to $NEW_VERSION" \
+            --body "Upstream fm1-emu released $NEW_VERSION (was $OLD_VERSION).
+
+          WASM prerelease \`wasm-${NEW_VERSION}\` has been published by vendor-sync.
+
+          After merging, tag the new version to create a release and update the \`v1\` alias." \
+            --base main \
+            --head "$BRANCH"

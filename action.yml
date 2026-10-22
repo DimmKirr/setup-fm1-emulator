@@ -1,0 +1,185 @@
+name: 'Setup FM1 Emulator'
+description: 'Install the fm1-emu binary and WASM emulator for FM1 firmware testing'
+branding:
+  icon: 'play-circle'
+  color: 'purple'
+
+# Baked emulator version. Bump this + cut a new release to update.
+# The track.yml workflow creates a PR automatically when upstream releases.
+
+inputs:
+  version:
+    description: 'fm1-emu release tag (e.g. v0.2.0). Defaults to the version baked into this action release.'
+    required: false
+    default: ''
+  github-token:
+    description: 'GitHub token for downloading release assets'
+    required: false
+    default: ${{ github.token }}
+  install-playwright:
+    description: 'Install Playwright and Chromium for E2E testing'
+    required: false
+    default: 'true'
+
+outputs:
+  version:
+    description: 'Installed fm1-emu version'
+    value: ${{ steps.setup.outputs.version }}
+  bin-path:
+    description: 'Path to the fm1-emu binary'
+    value: ${{ steps.setup.outputs.bin-path }}
+  web-path:
+    description: 'Path to the WASM emulator directory (index.html, fm1_web.wasm, etc.)'
+    value: ${{ steps.setup.outputs.web-path }}
+  cache-hit:
+    description: 'Whether the emulator was restored from cache'
+    value: ${{ steps.cache.outputs.cache-hit }}
+  chromium-path:
+    description: 'Path to the Playwright Chromium binary (empty if install-playwright is false)'
+    value: ${{ steps.playwright.outputs.chromium-path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Resolve version and platform
+      id: resolve
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        BAKED_VERSION="v0.2.0"
+        VERSION="${INPUT_VERSION:-$BAKED_VERSION}"
+        SEMVER="${VERSION#v}"
+
+        case "$(uname -s)-$(uname -m)" in
+          Linux-x86_64)  PLATFORM="linux-x86_64" ;;
+          Linux-aarch64) PLATFORM="linux-arm64"   ;;
+          Darwin-arm64)  PLATFORM="macos-arm64"   ;;
+          *) echo "::error::Unsupported platform: $(uname -s)-$(uname -m)"; exit 1 ;;
+        esac
+
+        echo "version=$VERSION"   >> "$GITHUB_OUTPUT"
+        echo "semver=$SEMVER"     >> "$GITHUB_OUTPUT"
+        echo "platform=$PLATFORM" >> "$GITHUB_OUTPUT"
+
+    - name: Restore from cache
+      id: cache
+      uses: actions/cache@v6
+      with:
+        path: ~/.fm1-emulator
+        key: fm1-emulator-v2-${{ steps.resolve.outputs.version }}-${{ steps.resolve.outputs.platform }}
+
+    - name: Download binary
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        VERSION: ${{ steps.resolve.outputs.version }}
+        SEMVER: ${{ steps.resolve.outputs.semver }}
+        PLATFORM: ${{ steps.resolve.outputs.platform }}
+      run: |
+        set -euo pipefail
+        INSTALL_DIR="$HOME/.fm1-emulator"
+        mkdir -p "$INSTALL_DIR/bin"
+
+        ASSET="fm1-emu-${SEMVER}-${PLATFORM}.tar.gz"
+        URL="https://github.com/joakimeriksson/fm1-emu/releases/download/${VERSION}/${ASSET}"
+
+        echo "Downloading $URL..."
+        curl -fSL --retry 3 -o "/tmp/$ASSET" "$URL"
+
+        echo "Extracting to $INSTALL_DIR/bin/..."
+        tar -xzf "/tmp/$ASSET" -C "$INSTALL_DIR/bin/" --strip-components=1
+        rm -f "/tmp/$ASSET"
+
+        chmod +x "$INSTALL_DIR/bin/fm1-emu"
+
+    - name: Download or build WASM emulator
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        VERSION: ${{ steps.resolve.outputs.version }}
+      run: |
+        set -euo pipefail
+        INSTALL_DIR="$HOME/.fm1-emulator"
+        WEB_DIR="$INSTALL_DIR/web"
+        mkdir -p "$WEB_DIR"
+
+        if [ -f "$WEB_DIR/fm1_web.wasm" ]; then
+          echo "WASM already present at $WEB_DIR/fm1_web.wasm, skipping"
+          exit 0
+        fi
+
+        # Try downloading pre-built WASM dist from vendor-sync prerelease
+        ACTION_REPO="${{ github.action_repository }}"
+        ACTION_REPO="${ACTION_REPO:-${{ github.repository }}}"
+        WASM_TAG="wasm-${VERSION}"
+
+        echo "Trying vendor-sync prerelease: $WASM_TAG"
+        DOWNLOADED=false
+        gh release download "$WASM_TAG" \
+          --repo "$ACTION_REPO" \
+          --pattern "fm1-web-dist.tar.gz" \
+          --dir /tmp \
+          2>/dev/null && DOWNLOADED=true || true
+
+        if [ "$DOWNLOADED" = true ]; then
+          tar -xzf /tmp/fm1-web-dist.tar.gz -C "$WEB_DIR"
+          rm -f /tmp/fm1-web-dist.tar.gz
+          echo "WASM dist downloaded from vendor-sync prerelease ($WASM_TAG)"
+        else
+          echo "::warning::Pre-built WASM not found at $WASM_TAG, building from source..."
+          SOURCE_DIR="$(mktemp -d)"
+          git clone --depth 1 --branch "$VERSION" \
+            https://github.com/joakimeriksson/fm1-emu.git "$SOURCE_DIR"
+          rustup target add wasm32-unknown-unknown
+          cd "$SOURCE_DIR" && bash web/build.sh
+          cp -r "$SOURCE_DIR/web/dist/"* "$WEB_DIR/"
+          rm -rf "$SOURCE_DIR"
+          echo "WASM built from source"
+        fi
+
+        ls "$WEB_DIR/fm1_web.wasm"
+
+    - name: Install Playwright and ffmpeg
+      if: inputs.install-playwright == 'true'
+      id: playwright
+      shell: bash
+      run: |
+        set -euo pipefail
+        pip install playwright
+        python3 -m playwright install --with-deps chromium
+        if ! command -v ffmpeg &>/dev/null; then
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+        fi
+        CHROMIUM=$(python3 -c "from playwright._impl._driver import compute_driver_executable; print(compute_driver_executable())" 2>/dev/null || true)
+        if [ -z "$CHROMIUM" ]; then
+          CHROMIUM=$(find "$HOME/.cache/ms-playwright" -name chromium-* -path "*/chrome-linux/chrome" 2>/dev/null | head -1 || true)
+        fi
+        echo "chromium-path=$CHROMIUM" >> "$GITHUB_OUTPUT"
+        echo "Playwright Chromium installed: $CHROMIUM"
+        echo "ffmpeg: $(ffmpeg -version | head -1)"
+
+    - name: Set environment
+      id: setup
+      shell: bash
+      env:
+        VERSION: ${{ steps.resolve.outputs.version }}
+      run: |
+        set -euo pipefail
+        INSTALL_DIR="$HOME/.fm1-emulator"
+
+        test -x "$INSTALL_DIR/bin/fm1-emu"          || { echo "::error::fm1-emu binary not found"; exit 1; }
+        test -f "$INSTALL_DIR/web/fm1_web.wasm"    || { echo "::error::fm1_web.wasm not found"; exit 1; }
+
+        echo "$INSTALL_DIR/bin" >> "$GITHUB_PATH"
+
+        echo "version=$VERSION"                        >> "$GITHUB_OUTPUT"
+        echo "bin-path=$INSTALL_DIR/bin/fm1-emu"       >> "$GITHUB_OUTPUT"
+        echo "web-path=$INSTALL_DIR/web"               >> "$GITHUB_OUTPUT"
+
+        echo "FM1 emulator ready:"
+        echo "  version:  $VERSION"
+        echo "  binary:   $INSTALL_DIR/bin/fm1-emu"
+        echo "  web:      $INSTALL_DIR/web"

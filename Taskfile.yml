@@ -1,0 +1,119 @@
+version: '3'
+
+vars:
+  FM1_VERSION: v0.2.0
+  MIRROR_REPO: dimmkirr/setup-fm1-emulator
+  INSTALL_DIR: '{{.HOME}}/.fm1-emulator'
+
+tasks:
+  default:
+    desc: Download fm1-emu binary, WASM emulator, and Playwright
+    aliases: [download]
+    platforms: [linux, darwin]
+    cmds:
+      - task: download:fm1-emu
+      - task: download:wasm
+      - task: download:playwright
+
+  download:fm1-emu:
+    desc: Download fm1-emu native binary
+    platforms: [linux/amd64, linux/arm64, darwin/arm64]
+    preconditions:
+      - sh: command -v curl
+        msg: curl is required
+    status:
+      - test -x {{.INSTALL_DIR}}/bin/fm1-emu
+    vars:
+      PLATFORM_MAP:
+        sh: |
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64)  echo "linux-x86_64" ;;
+            Linux-aarch64) echo "linux-arm64"   ;;
+            Darwin-arm64)  echo "macos-arm64"   ;;
+          esac
+      SEMVER: '{{trimPrefix "v" .FM1_VERSION}}'
+    cmds:
+      - mkdir -p {{.INSTALL_DIR}}/bin
+      - curl -fSL --retry 3 -o /tmp/fm1-emu.tar.gz
+          "https://github.com/joakimeriksson/fm1-emu/releases/download/{{.FM1_VERSION}}/fm1-emu-{{.SEMVER}}-{{.PLATFORM_MAP}}.tar.gz"
+      - tar -xzf /tmp/fm1-emu.tar.gz -C {{.INSTALL_DIR}}/bin/ --strip-components=1
+      - rm -f /tmp/fm1-emu.tar.gz
+      - chmod +x {{.INSTALL_DIR}}/bin/fm1-emu
+
+  download:wasm:
+    desc: Download WASM emulator (vendor-sync prerelease, fallback to build from source)
+    preconditions:
+      - sh: command -v gh
+        msg: GitHub CLI (gh) is required. Install from https://cli.github.com
+    status:
+      - test -f {{.INSTALL_DIR}}/web/fm1_web.wasm
+    cmds:
+      - mkdir -p {{.INSTALL_DIR}}/web
+      - |
+        set -euo pipefail
+        WASM_TAG="wasm-{{.FM1_VERSION}}"
+
+        echo "Trying vendor-sync prerelease: $WASM_TAG..."
+        DOWNLOADED=false
+        gh release download "$WASM_TAG" \
+          --repo "{{.MIRROR_REPO}}" \
+          --pattern "fm1-web-dist.tar.gz" \
+          --dir /tmp \
+          2>/dev/null && DOWNLOADED=true || true
+
+        if [ "$DOWNLOADED" = true ]; then
+          tar -xzf /tmp/fm1-web-dist.tar.gz -C "{{.INSTALL_DIR}}/web"
+          rm -f /tmp/fm1-web-dist.tar.gz
+          echo "[wasm] Downloaded from vendor-sync prerelease ($WASM_TAG)"
+        else
+          echo "WARNING: Pre-built WASM not found, building from source..."
+          SOURCE_DIR="$(mktemp -d)"
+          git clone --depth 1 --branch "{{.FM1_VERSION}}" \
+            https://github.com/joakimeriksson/fm1-emu.git "$SOURCE_DIR"
+          rustup target add wasm32-unknown-unknown
+          cd "$SOURCE_DIR" && bash web/build.sh
+          cp -r "$SOURCE_DIR/web/dist/"* "{{.INSTALL_DIR}}/web/"
+          rm -rf "$SOURCE_DIR"
+          echo "[wasm] Built from source"
+        fi
+
+  download:playwright:
+    desc: Download Playwright, Chromium, and ffmpeg for E2E testing
+    preconditions:
+      - sh: command -v python3
+        msg: python3 is required
+    status:
+      - python3 -c "import playwright" 2>/dev/null
+    cmds:
+      - pip install playwright
+      - task: download:playwright:chromium
+      - task: download:playwright:ffmpeg
+
+  download:playwright:chromium:
+    desc: Install Playwright Chromium browser
+    internal: true
+    cmds:
+      - cmd: python3 -m playwright install --with-deps chromium
+        platforms: [linux]
+      - cmd: python3 -m playwright install chromium
+        platforms: [darwin]
+
+  download:playwright:ffmpeg:
+    desc: Install ffmpeg for GIF recording
+    internal: true
+    status:
+      - command -v ffmpeg
+    cmds:
+      - cmd: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+        platforms: [linux]
+      - cmd: brew install ffmpeg
+        platforms: [darwin]
+
+  remove:
+    desc: Remove fm1-emu, WASM, Playwright, and build artifacts
+    cmds:
+      - rm -rf {{.INSTALL_DIR}}
+      - rm -rf results/
+      - pip uninstall -y playwright 2>/dev/null || true
+      - python3 -m playwright uninstall --all 2>/dev/null || true
+      - echo "Removed {{.INSTALL_DIR}}, results/, and Playwright"

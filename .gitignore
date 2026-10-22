@@ -1,0 +1,14 @@
+.devcell/
+.scratch/
+.idea/
+results/
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/

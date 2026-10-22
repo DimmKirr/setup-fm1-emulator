@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 4 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test action
+        uses: ./
+
+  e2e:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - firmware: felucca
+            url: https://thefirmwarehub.com/fw/felucca-1.6.1.fwsc
+          - firmware: sloop
+            url: https://thefirmwarehub.com/fw/sloop-2.6.fwsc
+          - firmware: melodee
+            url: https://thefirmwarehub.com/fw/melodee-1.3.6.fwsc
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Setup fm1-emu
+        id: emu
+        uses: ./
+
+      - name: Run E2E test
+        id: e2e
+        continue-on-error: true
+        env:
+          FM1_WEB_DIR: ${{ steps.emu.outputs.web-path }}
+          FIRMWARE_NAME: ${{ matrix.firmware }}
+          FIRMWARE_URL: ${{ matrix.url }}
+          RESULTS_DIR: results
+        run: |
+          set -o pipefail
+          python3 -m unittest examples.e2e_firmware_ui_test -v 2>&1 \
+            | tee e2e-output.txt
+
+      - name: Upload screenshots to release
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="ci-screenshots"
+          REPO="${{ github.repository }}"
+
+          # Ensure the screenshots release exists
+          gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$REPO" \
+                 --title "CI Screenshots" \
+                 --notes "Auto-updated by CI workflow. Latest firmware E2E screenshots." \
+                 --prerelease
+
+          for file in results/${{ matrix.firmware }}/screenshots/*.png results/${{ matrix.firmware }}/screenshots/*.gif; do
+            [ -f "$file" ] || continue
+            asset_name="$(basename "$file")"
+            gh release delete-asset "$TAG" "$asset_name" --repo "$REPO" --yes 2>/dev/null || true
+            gh release upload "$TAG" "$file#$asset_name" --repo "$REPO" --clobber
+          done
+
+      - name: Post screenshots to summary
+        if: always()
+        run: |
+          REPO="${{ github.repository }}"
+          TAG="ci-screenshots"
+          {
+            echo "## ${{ matrix.firmware }}"
+            echo ""
+            for file in results/${{ matrix.firmware }}/screenshots/*.png results/${{ matrix.firmware }}/screenshots/*.gif; do
+              [ -f "$file" ] || continue
+              ext="${file##*.}"
+              name=$(basename "$file" ".$ext")
+              label=$(echo "$name" | sed "s/^${{ matrix.firmware }}-//" | tr '_-' '  ')
+              asset_name="$(basename "$file")"
+              url="https://github.com/${REPO}/releases/download/${TAG}/${asset_name}"
+              echo "### ${label}"
+              echo ""
+              echo "![${label}](${url})"
+              echo ""
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload screenshots artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: screenshots-${{ matrix.firmware }}
+          path: |
+            results/${{ matrix.firmware }}/screenshots/*.png
+            results/${{ matrix.firmware }}/screenshots/*.gif
+          retention-days: 14
+
+      - name: Fail if tests failed
+        if: steps.e2e.outcome == 'failure'
+        run: exit 1
