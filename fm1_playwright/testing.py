@@ -2,6 +2,7 @@
 # Copyright (C) 2026 Dmitry Kireev
 """Base test case for driving FM-1 firmware in the WASM emulator via Playwright."""
 
+import base64
 import contextlib
 import http.server
 import os
@@ -138,6 +139,48 @@ class FirmwareUITest(unittest.TestCase):
                     }
                 }''', FIRMWARE_URL)
 
+            # Inject #lcdcopy canvas that mirrors the LCD framebuffer.
+            # Intercepts Uint16Array.prototype.set to capture the 240x240
+            # RGB565 LCD data before panel_draw() composites it, converts
+            # to RGBA, and blits onto a hidden canvas for SCREEN-mode
+            # screenshots.
+            page.evaluate('''() => {
+                const c = document.createElement("canvas");
+                c.id = "lcdcopy";
+                c.width = 240;
+                c.height = 240;
+                c.style.display = "none";
+                document.body.appendChild(c);
+                const lcdCtx = c.getContext("2d");
+                const img = lcdCtx.createImageData(240, 240);
+                const rgba = img.data;
+
+                Object.defineProperty(window, "__fm1_lcdcopy_hook", {
+                    value: function(lcd) {
+                        for (let i = 0; i < 57600; i++) {
+                            const px = lcd[i];
+                            const r = (px >> 11) & 0x1f;
+                            const g = (px >> 5) & 0x3f;
+                            const b = px & 0x1f;
+                            rgba[i * 4]     = (r << 3) | (r >> 2);
+                            rgba[i * 4 + 1] = (g << 2) | (g >> 4);
+                            rgba[i * 4 + 2] = (b << 3) | (b >> 2);
+                            rgba[i * 4 + 3] = 255;
+                        }
+                        lcdCtx.putImageData(img, 0, 0);
+                    },
+                    writable: false
+                });
+
+                const origSet = Uint16Array.prototype.set;
+                Uint16Array.prototype.set = function(src) {
+                    origSet.call(this, src);
+                    if (src && src.length === 57600 && this.length === 57600) {
+                        window.__fm1_lcdcopy_hook(src);
+                    }
+                };
+            }''')
+
             page.click('#start')
             try:
                 page.wait_for_function(
@@ -156,28 +199,45 @@ class FirmwareUITest(unittest.TestCase):
         return self.__class__._page
 
     def _get_screenshot_target(self):
+        """Returns (element, is_lcd) tuple."""
         page = self._get_page()
         if VIEW_MODE == 'SCREEN':
             lcd = page.query_selector('#lcdcopy')
             if lcd:
-                page.evaluate('''() => {
-                    const c = document.getElementById("lcdcopy");
-                    if (c) c.style.display = "block";
-                }''')
-                return lcd
+                return lcd, True
         canvas = page.query_selector('canvas#panel')
-        return canvas or page.query_selector('canvas') or page
+        return (canvas or page.query_selector('canvas') or page), False
+
+    def _save_canvas_png(self, canvas_handle, path):
+        """Save a canvas element as PNG via toDataURL (exact pixel dimensions)."""
+        page = self._get_page()
+        data_url = page.evaluate('''(sel) => {
+            const c = document.querySelector(sel);
+            return c ? c.toDataURL("image/png") : null;
+        }''', '#lcdcopy')
+        if data_url and data_url.startswith('data:image/png;base64,'):
+            png_data = base64.b64decode(data_url.split(',', 1)[1])
+            with open(path, 'wb') as f:
+                f.write(png_data)
+        else:
+            canvas_handle.screenshot(path=str(path))
 
     def _screenshot(self, name):
         path = self._screenshot_dir / f'{FIRMWARE_NAME}-{name}.png'
-        target = self._get_screenshot_target()
-        target.screenshot(path=str(path))
+        target, is_lcd = self._get_screenshot_target()
+        if is_lcd:
+            self._save_canvas_png(target, str(path))
+        else:
+            target.screenshot(path=str(path))
         return path
 
     def _capture_frame(self, frames_dir, index):
-        target = self._get_screenshot_target()
+        target, is_lcd = self._get_screenshot_target()
         path = os.path.join(frames_dir, f'frame-{index:04d}.png')
-        target.screenshot(path=path)
+        if is_lcd:
+            self._save_canvas_png(target, path)
+        else:
+            target.screenshot(path=path)
         return path
 
     @contextlib.contextmanager
