@@ -28,6 +28,8 @@ FIRMWARE_URL = os.environ.get('FIRMWARE_URL', '')
 RESULTS_DIR = Path(os.environ.get('RESULTS_DIR', 'results'))
 CHROMIUM_PATH = os.environ.get('CHROMIUM_PATH')
 VIEW_MODE = os.environ.get('FM1_VIEW', 'DEVICE').upper()  # DEVICE | SCREEN
+LCD_SCALE = int(os.environ.get('FM1_SCALE', '2'))  # 1x, 2x, 3x, 4x
+HEADLESS = os.environ.get('FM1_HEADLESS', '1') != '0'  # FM1_HEADLESS=0 for headed
 
 
 def _find_free_port():
@@ -92,7 +94,7 @@ class FirmwareUITest(unittest.TestCase):
 
         cls._pw = sync_playwright().start()
         launch_kwargs = dict(
-            headless=True,
+            headless=HEADLESS,
             args=['--autoplay-policy=no-user-gesture-required'],
         )
         if CHROMIUM_PATH and os.path.isfile(CHROMIUM_PATH):
@@ -118,7 +120,10 @@ class FirmwareUITest(unittest.TestCase):
 
     def _get_page(self):
         if self.__class__._page is None:
-            page = self._browser.new_page()
+            page_opts = {}
+            if LCD_SCALE > 1:
+                page_opts['device_scale_factor'] = LCD_SCALE
+            page = self._browser.new_page(**page_opts)
             page._console_logs = []
             page.on('console', lambda msg: page._console_logs.append(
                 f'[{msg.type}] {msg.text}'))
@@ -143,16 +148,23 @@ class FirmwareUITest(unittest.TestCase):
             # Intercepts Uint16Array.prototype.set to capture the 240x240
             # RGB565 LCD data before panel_draw() composites it, converts
             # to RGBA, and blits onto a hidden canvas for SCREEN-mode
-            # screenshots.
-            page.evaluate('''() => {
+            # screenshots. When LCD_SCALE > 1, the canvas is enlarged and
+            # each pixel is drawn as a scale x scale block (nearest-neighbor).
+            page.evaluate('''(scale) => {
+                const W = 240, H = 240;
                 const c = document.createElement("canvas");
                 c.id = "lcdcopy";
-                c.width = 240;
-                c.height = 240;
+                c.width = W * scale;
+                c.height = H * scale;
                 c.style.display = "none";
                 document.body.appendChild(c);
                 const lcdCtx = c.getContext("2d");
-                const img = lcdCtx.createImageData(240, 240);
+
+                const src = document.createElement("canvas");
+                src.width = W;
+                src.height = H;
+                const srcCtx = src.getContext("2d");
+                const img = srcCtx.createImageData(W, H);
                 const rgba = img.data;
 
                 Object.defineProperty(window, "__fm1_lcdcopy_hook", {
@@ -167,7 +179,9 @@ class FirmwareUITest(unittest.TestCase):
                             rgba[i * 4 + 2] = (b << 3) | (b >> 2);
                             rgba[i * 4 + 3] = 255;
                         }
-                        lcdCtx.putImageData(img, 0, 0);
+                        srcCtx.putImageData(img, 0, 0);
+                        lcdCtx.imageSmoothingEnabled = false;
+                        lcdCtx.drawImage(src, 0, 0, W * scale, H * scale);
                     },
                     writable: false
                 });
@@ -179,7 +193,7 @@ class FirmwareUITest(unittest.TestCase):
                         window.__fm1_lcdcopy_hook(src);
                     }
                 };
-            }''')
+            }''', LCD_SCALE)
 
             page.click('#start')
             try:
