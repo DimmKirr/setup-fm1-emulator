@@ -56,18 +56,12 @@ By default the emulator version baked into the action release is used. Override 
 | `cache-hit` | Whether restored from cache |
 | `chromium-path` | Path to Playwright Chromium (empty if `install-playwright` is `false`) |
 
-## fm1_playwright package
+## E2E Testing with fm1-playwright
 
-The repo includes `fm1_playwright`, a reusable Playwright test harness for driving the FM-1 emulator. Install it directly from GitHub:
-
-```bash
-pip install git+https://github.com/DimmKirr/setup-fm1-emulator.git
-```
-
-Or pin a version:
+For writing E2E tests against the emulator, install the [fm1-playwright](https://github.com/DimmKirr/fm1-playwright) package:
 
 ```bash
-pip install git+https://github.com/DimmKirr/setup-fm1-emulator.git@v1
+pip install fm1-playwright
 ```
 
 Then subclass `FirmwareUITest` in your tests:
@@ -79,85 +73,13 @@ class MyFirmwareTest(FirmwareUITest):
     def test_boot(self):
         self._get_page()
         self._screenshot('home')
+
+    def test_change_preset(self):
+        self.rotate_encoder('k2', direction=1, steps=1, delay_ms=800)
+        self._screenshot('preset-next')
 ```
 
-### View modes
-
-Set `FM1_VIEW` to control what gets captured in screenshots and GIFs:
-
-| Value | Captures | Size |
-|-------|----------|------|
-| `DEVICE` (default) | Full device canvas (panel + buttons + keys) | Variable |
-| `SCREEN` | LCD screen only (`#lcdcopy`) | 240x240 |
-
-```bash
-FM1_VIEW=SCREEN python3 -m unittest my_tests -v
-```
-
-## E2E Testing
-
-See [`examples/`](https://github.com/DimmKirr/setup-fm1-emulator/tree/main/examples) for E2E test examples (both DEVICE and SCREEN modes) and [`.github/workflows/ci.yml`](.github/workflows/ci.yml) for a full working workflow with screenshot uploads and GIF recording.
-
-<details>
-<summary>Matrix workflow example</summary>
-
-```yaml
-jobs:
-  e2e:
-    runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        include:
-          - firmware: felucca
-            url: https://thefirmwarehub.com/fw/felucca-1.6.1.fwsc
-          - firmware: sloop
-            url: https://thefirmwarehub.com/fw/sloop-2.6.fwsc
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-      - uses: dimmkirr/setup-fm1-emulator@v1
-        id: emu
-      - env:
-          FM1_WEB_DIR: ${{ steps.emu.outputs.web-path }}
-          FIRMWARE_NAME: ${{ matrix.firmware }}
-          FIRMWARE_URL: ${{ matrix.url }}
-        run: python3 -m unittest examples.e2e_firmware_ui_test -v
-```
-
-</details>
-
-## Emulator Control
-
-Programmatic control of the emulator via Playwright:
-
-- `rotate_encoder(name, direction, steps)`: rotate any encoder (select, k1, k2, presets, algorithm, master, knob1-4)
-- `press_button(name)`: press a button (home, scl, env, lfo, edit, fx, etc.)
-- `play_note(note, hold_ms)`: play a note on the music keyboard (C4..F5)
-- `hold_button(name)`: context manager for holding a button while performing other actions
-- `record_gif(name)`: record canvas frames into an animated GIF
-- Canvas-only screenshots (device view, not full page)
-
-```python
-# Change preset
-self.rotate_encoder('k2', direction=1, steps=1)
-
-# Play a C# minor chord
-self.play_note('C#4', hold_ms=500)
-self.play_note('E4', hold_ms=500)
-self.play_note('G#4', hold_ms=500)
-
-# Hold EDIT while rotating K1
-with self.hold_button('edit'):
-    self.rotate_encoder('k1', direction=1, steps=3)
-
-# Record a GIF of preset scrolling
-with self.record_gif('preset-scroll') as snap:
-    for _ in range(4):
-        snap()
-        self.rotate_encoder('k2', direction=1, steps=1, delay_ms=600)
-```
+See the [fm1-playwright repo](https://github.com/DimmKirr/fm1-playwright) for full API docs, examples, and environment variables.
 
 <details>
 <summary>More screenshots</summary>
