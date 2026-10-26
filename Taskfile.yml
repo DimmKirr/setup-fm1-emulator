@@ -2,6 +2,14 @@ version: '3'
 
 vars:
   FM1_VERSION: v0.2.0
+  FM1_SOURCE_REPO: '{{default "joakimeriksson/fm1-emu" .FM1_SOURCE_REPO}}'
+  FM1_SOURCE_LABEL:
+    sh: |
+      case "{{.FM1_SOURCE_REPO}}" in
+        joakimeriksson/fm1-emu) echo "upstream" ;;
+        DimmKirr/fm1-emu)      echo "dimmkirr" ;;
+        *)                     echo "{{.FM1_SOURCE_REPO}}" | cut -d'/' -f1 | tr '[:upper:]' '[:lower:]' ;;
+      esac
   MIRROR_REPO: dimmkirr/setup-fm1-emulator
   INSTALL_DIR: '{{.HOME}}/.fm1-emulator'
 
@@ -35,7 +43,7 @@ tasks:
     cmds:
       - mkdir -p {{.INSTALL_DIR}}/bin
       - curl -fSL --retry 3 -o /tmp/fm1-emu.tar.gz
-          "https://github.com/joakimeriksson/fm1-emu/releases/download/{{.FM1_VERSION}}/fm1-emu-{{.SEMVER}}-{{.PLATFORM_MAP}}.tar.gz"
+          "https://github.com/{{.FM1_SOURCE_REPO}}/releases/download/{{.FM1_VERSION}}/fm1-emu-{{.SEMVER}}-{{.PLATFORM_MAP}}.tar.gz"
       - tar -xzf /tmp/fm1-emu.tar.gz -C {{.INSTALL_DIR}}/bin/ --strip-components=1
       - rm -f /tmp/fm1-emu.tar.gz
       - chmod +x {{.INSTALL_DIR}}/bin/fm1-emu
@@ -51,7 +59,8 @@ tasks:
       - mkdir -p {{.INSTALL_DIR}}/web
       - |
         set -euo pipefail
-        WASM_TAG="wasm-{{.FM1_VERSION}}"
+        WASM_TAG="wasm-{{.FM1_SOURCE_LABEL}}-{{.FM1_VERSION}}"
+        WASM_TAG_OLD="wasm-{{.FM1_VERSION}}"
 
         echo "Trying vendor-sync prerelease: $WASM_TAG..."
         DOWNLOADED=false
@@ -61,20 +70,30 @@ tasks:
           --dir /tmp \
           2>/dev/null && DOWNLOADED=true || true
 
+        # Fallback to legacy tag format
+        if [ "$DOWNLOADED" != true ]; then
+          echo "Trying legacy tag: $WASM_TAG_OLD..."
+          gh release download "$WASM_TAG_OLD" \
+            --repo "{{.MIRROR_REPO}}" \
+            --pattern "fm1-web-dist.tar.gz" \
+            --dir /tmp \
+            2>/dev/null && DOWNLOADED=true || true
+        fi
+
         if [ "$DOWNLOADED" = true ]; then
           tar -xzf /tmp/fm1-web-dist.tar.gz -C "{{.INSTALL_DIR}}/web"
           rm -f /tmp/fm1-web-dist.tar.gz
-          echo "[wasm] Downloaded from vendor-sync prerelease ($WASM_TAG)"
+          echo "[wasm] Downloaded from vendor-sync prerelease"
         else
           echo "WARNING: Pre-built WASM not found, building from source..."
           SOURCE_DIR="$(mktemp -d)"
           git clone --depth 1 --branch "{{.FM1_VERSION}}" \
-            https://github.com/joakimeriksson/fm1-emu.git "$SOURCE_DIR"
+            "https://github.com/{{.FM1_SOURCE_REPO}}.git" "$SOURCE_DIR"
           rustup target add wasm32-unknown-unknown
           cd "$SOURCE_DIR" && bash web/build.sh
           cp -r "$SOURCE_DIR/web/dist/"* "{{.INSTALL_DIR}}/web/"
           rm -rf "$SOURCE_DIR"
-          echo "[wasm] Built from source"
+          echo "[wasm] Built from source ({{.FM1_SOURCE_REPO}})"
         fi
 
   download:playwright:

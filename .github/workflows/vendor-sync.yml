@@ -19,6 +19,16 @@ permissions:
 jobs:
   sync:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - repo: joakimeriksson/fm1-emu
+            label: upstream
+            bump-pr: true
+          - repo: DimmKirr/fm1-emu
+            label: dimmkirr
+            bump-pr: false
     steps:
       - uses: actions/checkout@v7
 
@@ -35,12 +45,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          LATEST=$(gh release view --repo joakimeriksson/fm1-emu --json tagName -q .tagName)
+          LATEST=$(gh release view --repo ${{ matrix.repo }} --json tagName -q .tagName 2>/dev/null || true)
+          if [ -z "$LATEST" ]; then
+            echo "No release found for ${{ matrix.repo }}, skipping"
+            echo "new=false" >> "$GITHUB_OUTPUT"
+            echo "latest=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           CURRENT="${{ steps.current.outputs.version }}"
           echo "Current: $CURRENT"
           echo "Latest:  $LATEST"
           echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
-          if [ "$LATEST" != "$CURRENT" ]; then
+          if [ "${{ matrix.bump-pr }}" = "false" ] || [ "$LATEST" != "$CURRENT" ]; then
             echo "new=true" >> "$GITHUB_OUTPUT"
           else
             echo "new=false" >> "$GITHUB_OUTPUT"
@@ -54,7 +70,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="wasm-${{ steps.upstream.outputs.latest }}"
+          TAG="wasm-${{ matrix.label }}-${{ steps.upstream.outputs.latest }}"
           if gh release view "$TAG" --json tagName -q .tagName >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
@@ -69,7 +85,7 @@ jobs:
           && steps.wasm-exists.outputs.exists != 'true'
         run: |
           git clone --depth 1 --branch "${{ steps.upstream.outputs.latest }}" \
-            https://github.com/joakimeriksson/fm1-emu.git /tmp/fm1-emu-src
+            https://github.com/${{ matrix.repo }}.git /tmp/fm1-emu-src
 
       - name: Build WASM emulator
         if: >-
@@ -112,19 +128,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.upstream.outputs.latest }}
+          LABEL: ${{ matrix.label }}
+          SOURCE_REPO: ${{ matrix.repo }}
         run: |
           set -euo pipefail
-          RELEASE_TAG="wasm-${VERSION}"
+          RELEASE_TAG="wasm-${LABEL}-${VERSION}"
 
           gh release create "$RELEASE_TAG" \
             /tmp/fm1-web-dist.tar.gz /tmp/fm1-web-dist.tar.gz.sha256 \
             --repo "${{ github.repository }}" \
             --prerelease \
-            --title "WASM ${VERSION} (built from source)" \
+            --title "WASM ${LABEL} ${VERSION} (built from source)" \
             --notes "$(cat <<EOF
           **Pre-built WASM emulator for fm1-emu ${VERSION}**
 
-          Built from [fm1-emu \`${VERSION}\`](https://github.com/joakimeriksson/fm1-emu/releases/tag/${VERSION}).
+          Built from [${SOURCE_REPO} \`${VERSION}\`](https://github.com/${SOURCE_REPO}/releases/tag/${VERSION}).
           Used by the [setup-fm1-emulator](https://github.com/${{ github.repository }}) GitHub Action.
 
           **Archive SHA256:** \`$(cut -d' ' -f1 /tmp/fm1-web-dist.tar.gz.sha256)\`
@@ -159,7 +177,7 @@ jobs:
       # ── Bump baked version via PR ──────────────────────────────
 
       - name: Create version bump PR
-        if: steps.upstream.outputs.new == 'true'
+        if: steps.upstream.outputs.new == 'true' && matrix.bump-pr == true
         env:
           GH_TOKEN: ${{ github.token }}
           NEW_VERSION: ${{ steps.upstream.outputs.latest }}
@@ -187,7 +205,7 @@ jobs:
             --title "chore: bump fm1-emu default to $NEW_VERSION" \
             --body "Upstream fm1-emu released $NEW_VERSION (was $OLD_VERSION).
 
-          WASM prerelease \`wasm-${NEW_VERSION}\` has been published by vendor-sync.
+          WASM prerelease \`wasm-upstream-${NEW_VERSION}\` has been published by vendor-sync.
 
           After merging, tag the new version to create a release and update the \`v1\` alias." \
             --base main \

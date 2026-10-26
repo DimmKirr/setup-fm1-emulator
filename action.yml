@@ -16,6 +16,10 @@ inputs:
     description: 'GitHub token for downloading release assets'
     required: false
     default: ${{ github.token }}
+  source-repo:
+    description: 'GitHub repo to download fm1-emu from (owner/name)'
+    required: false
+    default: 'joakimeriksson/fm1-emu'
   install-playwright:
     description: 'Install Playwright and Chromium for E2E testing'
     required: false
@@ -63,12 +67,22 @@ runs:
         echo "semver=$SEMVER"     >> "$GITHUB_OUTPUT"
         echo "platform=$PLATFORM" >> "$GITHUB_OUTPUT"
 
+        # Derive source label for WASM tag lookup
+        SOURCE_REPO="${{ inputs.source-repo }}"
+        case "$SOURCE_REPO" in
+          joakimeriksson/fm1-emu) LABEL="upstream" ;;
+          DimmKirr/fm1-emu)      LABEL="dimmkirr" ;;
+          *)                     LABEL=$(echo "$SOURCE_REPO" | cut -d'/' -f1 | tr '[:upper:]' '[:lower:]') ;;
+        esac
+        echo "label=$LABEL"             >> "$GITHUB_OUTPUT"
+        echo "source-repo=$SOURCE_REPO" >> "$GITHUB_OUTPUT"
+
     - name: Restore from cache
       id: cache
       uses: actions/cache@v6
       with:
         path: ~/.fm1-emulator
-        key: fm1-emulator-v2-${{ steps.resolve.outputs.version }}-${{ steps.resolve.outputs.platform }}
+        key: fm1-emulator-v2-${{ inputs.source-repo }}-${{ steps.resolve.outputs.version }}-${{ steps.resolve.outputs.platform }}
 
     - name: Download binary
       if: steps.cache.outputs.cache-hit != 'true'
@@ -83,7 +97,7 @@ runs:
         mkdir -p "$INSTALL_DIR/bin"
 
         ASSET="fm1-emu-${SEMVER}-${PLATFORM}.tar.gz"
-        URL="https://github.com/joakimeriksson/fm1-emu/releases/download/${VERSION}/${ASSET}"
+        URL="https://github.com/${{ inputs.source-repo }}/releases/download/${VERSION}/${ASSET}"
 
         echo "Downloading $URL..."
         curl -fSL --retry 3 -o "/tmp/$ASSET" "$URL"
@@ -100,6 +114,8 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github-token }}
         VERSION: ${{ steps.resolve.outputs.version }}
+        LABEL: ${{ steps.resolve.outputs.label }}
+        SOURCE_REPO: ${{ steps.resolve.outputs.source-repo }}
       run: |
         set -euo pipefail
         INSTALL_DIR="$HOME/.fm1-emulator"
@@ -114,15 +130,28 @@ runs:
         # Try downloading pre-built WASM dist from vendor-sync prerelease
         ACTION_REPO="${{ github.action_repository }}"
         ACTION_REPO="${ACTION_REPO:-${{ github.repository }}}"
-        WASM_TAG="wasm-${VERSION}"
 
-        echo "Trying vendor-sync prerelease: $WASM_TAG"
         DOWNLOADED=false
+
+        # Try new labelled tag first: wasm-<label>-<version>
+        WASM_TAG="wasm-${LABEL}-${VERSION}"
+        echo "Trying vendor-sync prerelease: $WASM_TAG"
         gh release download "$WASM_TAG" \
           --repo "$ACTION_REPO" \
           --pattern "fm1-web-dist.tar.gz" \
           --dir /tmp \
           2>/dev/null && DOWNLOADED=true || true
+
+        # Fall back to legacy tag: wasm-<version>
+        if [ "$DOWNLOADED" != true ]; then
+          WASM_TAG="wasm-${VERSION}"
+          echo "Trying legacy tag: $WASM_TAG"
+          gh release download "$WASM_TAG" \
+            --repo "$ACTION_REPO" \
+            --pattern "fm1-web-dist.tar.gz" \
+            --dir /tmp \
+            2>/dev/null && DOWNLOADED=true || true
+        fi
 
         if [ "$DOWNLOADED" = true ]; then
           tar -xzf /tmp/fm1-web-dist.tar.gz -C "$WEB_DIR"
@@ -132,7 +161,7 @@ runs:
           echo "::warning::Pre-built WASM not found at $WASM_TAG, building from source..."
           SOURCE_DIR="$(mktemp -d)"
           git clone --depth 1 --branch "$VERSION" \
-            https://github.com/joakimeriksson/fm1-emu.git "$SOURCE_DIR"
+            "https://github.com/${SOURCE_REPO}.git" "$SOURCE_DIR"
           rustup target add wasm32-unknown-unknown
           cd "$SOURCE_DIR" && bash web/build.sh
           cp -r "$SOURCE_DIR/web/dist/"* "$WEB_DIR/"
