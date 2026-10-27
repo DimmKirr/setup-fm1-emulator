@@ -1,7 +1,7 @@
 version: '3'
 
 vars:
-  FM1_VERSION: v0.2.0
+  FM1_VERSION: '{{default "v0.2.0" .FM1_VERSION}}'
   FM1_SOURCE_REPO: '{{default "joakimeriksson/fm1-emu" .FM1_SOURCE_REPO}}'
   FM1_SOURCE_LABEL:
     sh: |
