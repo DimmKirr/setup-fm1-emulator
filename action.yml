@@ -52,7 +52,7 @@ runs:
         INPUT_VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
-        BAKED_VERSION="v0.2.0"
+        BAKED_VERSION="v0.3.0"
         VERSION="${INPUT_VERSION:-$BAKED_VERSION}"
         SEMVER="${VERSION#v}"
 
